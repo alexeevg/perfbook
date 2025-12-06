@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>count_lim.c simulator</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1rem; }
+    .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+    th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: right; }
+    th { background: #f6f6f6; }
+    td:first-child, th:first-child { text-align: left; }
+    input[type="number"] { width: 6rem; }
+    button { padding: 0.3rem 0.6rem; }
+    .muted { color: #666; }
+  </style>
+</head>
+<body>
+  <h2>count_lim.c in JavaScript</h2>
+
+  <div class="row">
+    <label>globalcountmax:
+      <input id="gmax" type="number" value="10000" />
+    </label>
+    <div>globalcount: <b id="gcount">0</b></div>
+    <div>globalreserve: <b id="gres">0</b></div>
+    <div>read_count(): <b id="sum">0</b></div>
+    <div class="muted">online threads: <b id="nthreads">0</b></div>
+  </div>
+
+  <div class="row" style="margin-top: .5rem;">
+    <button id="addThread">+ Add thread</button>
+    <button id="removeThread">- Remove last thread</button>
+    <label>Delta: <input id="delta" type="number" value="1" /></label>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Thread</th>
+        <th>counter</th>
+        <th>countermax</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+
+  <script>
+    const NR_THREADS = 128;
+    const threads = [];
+    let globalcountmax = 10000;
+    let globalcount = 0;
+    let globalreserve = 0;
+
+    function num_online_threads() {
+      const n = threads.reduce((a, t) => a + (t ? 1 : 0), 0);
+      return Math.max(n, 1);
+    }
+
+    function allocateThreadId() {
+      for (let i = 0; i < NR_THREADS; i++) if (!threads[i]) return i;
+      return null;
+    }
+
+    function globalize_count(idx) {
+      const t = threads[idx];
+      if (!t) return;
+      globalcount += t.counter;
+      t.counter = 0;
+      globalreserve -= t.countermax;
+      t.countermax = 0;
+    }
+
+    function balance_count(idx) {
+      const t = threads[idx];
+      if (!t) return;
+      t.countermax = globalcountmax - globalcount - globalreserve;
+      t.countermax = Math.floor(t.countermax / num_online_threads());
+      if (t.countermax < 0) t.countermax = 0;
+      globalreserve += t.countermax;
+      t.counter = Math.floor(t.countermax / 2);
+      if (t.counter > globalcount) t.counter = globalcount;
+      globalcount -= t.counter;
+    }
+
+    function add_count(idx, delta) {
+      const t = threads[idx];
+      if (!t) return false;
+      if (t.countermax - t.counter >= delta) {
+        t.counter += delta;
+        return true;
+      }
+      globalize_count(idx);
+      if (globalcountmax - globalcount - globalreserve < delta) return false;
+      globalcount += delta;
+      balance_count(idx);
+      return true;
+    }
+
+    function sub_count(idx, delta) {
+      const t = threads[idx];
+      if (!t) return false;
+      if (t.counter >= delta) {
+        t.counter -= delta;
+        return true;
+      }
+      globalize_count(idx);
+      if (globalcount < delta) return false;
+      globalcount -= delta;
+      balance_count(idx);
+      return true;
+    }
+
+    function read_count() {
+      let sum = globalcount;
+      for (const t of threads) if (t) sum += t.counter;
+      return sum;
+    }
+
+    function count_register_thread() {
+      const id = allocateThreadId();
+      if (id === null) return null;
+      threads[id] = { counter: 0, countermax: 0 };
+      return id;
+    }
+
+    function count_unregister_thread(idx) {
+      if (!threads[idx]) return;
+      globalize_count(idx);
+      threads[idx] = null;
+    }
+
+    const model = {
+      threads,
+      get globalcountmax() { return globalcountmax; },
+      set globalcountmax(v) { globalcountmax = Math.max(0, Math.floor(v)); },
+      get globalcount() { return globalcount; },
+      get globalreserve() { return globalreserve; },
+      read_count,
+      add_count,
+      sub_count,
+      count_register_thread,
+      count_unregister_thread,
+      num_online_threads,
+    };
+
+    const el = {
+      gmax: document.getElementById('gmax'),
+      gcount: document.getElementById('gcount'),
+      gres: document.getElementById('gres'),
+      sum: document.getElementById('sum'),
+      nthreads: document.getElementById('nthreads'),
+      addThread: document.getElementById('addThread'),
+      removeThread: document.getElementById('removeThread'),
+      delta: document.getElementById('delta'),
+      tbody: document.getElementById('tbody'),
+    };
+
+    function render() {
+      el.gcount.textContent = String(model.globalcount);
+      el.gres.textContent = String(model.globalreserve);
+      el.sum.textContent = String(model.read_count());
+      el.nthreads.textContent = String(model.num_online_threads());
+      el.gmax.value = String(model.globalcountmax);
+
+      const rows = [];
+      model.threads.forEach((t, i) => {
+        if (!t) return;
+        rows.push(`
+          <tr>
+            <td>#${i}</td>
+            <td>${t.counter}</td>
+            <td>${t.countermax}</td>
+            <td style="text-align:left">
+              <button data-i="${i}" data-op="add">+Δ</button>
+              <button data-i="${i}" data-op="sub">-Δ</button>
+              <button data-i="${i}" data-op="unreg">unregister</button>
+            </td>
+          </tr>
+        `);
+      });
+      el.tbody.innerHTML = rows.join('');
+    }
+
+    el.gmax.addEventListener('change', () => {
+      const v = Number(el.gmax.value);
+      model.globalcountmax = Number.isFinite(v) ? v : model.globalcountmax;
+      render();
+    });
+
+    el.addThread.addEventListener('click', () => {
+      model.count_register_thread();
+      render();
+    });
+
+    el.removeThread.addEventListener('click', () => {
+      for (let i = model.threads.length - 1; i >= 0; i--) {
+        if (model.threads[i]) {
+          model.count_unregister_thread(i);
+          break;
+        }
+      }
+      render();
+    });
+
+    el.tbody.addEventListener('click', (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLButtonElement)) return;
+      const i = Number(target.dataset.i);
+      const op = target.dataset.op;
+      const d = Math.max(0, Math.floor(Number(el.delta.value) || 0));
+
+      if (op === 'add') model.add_count(i, d);
+      else if (op === 'sub') model.sub_count(i, d);
+      else if (op === 'unreg') model.count_unregister_thread(i);
+
+      render();
+    });
+
+    model.count_register_thread();
+    model.count_register_thread();
+    render();
+  </script>
+</body>
+</html>
