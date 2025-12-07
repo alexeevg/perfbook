@@ -14,10 +14,25 @@
     input[type="number"] { width: 6rem; }
     button { padding: 0.3rem 0.6rem; }
     .muted { color: #666; }
+    #eventLog { 
+      margin-top: 1rem; 
+      border: 1px solid #ddd; 
+      padding: 0.5rem; 
+      max-height: 300px; 
+      overflow-y: auto; 
+      background: #f9f9f9;
+      font-family: monospace;
+      font-size: 0.85rem;
+    }
+    .log-entry { 
+      padding: 0.2rem 0; 
+      border-bottom: 1px solid #eee; 
+    }
+    .log-entry:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
-  <h2>count_lim.c in JavaScript</h2>
+  <h2>count_lim.c</h2>
 
   <div class="row">
     <label>globalcountmax:
@@ -31,7 +46,6 @@
 
   <div class="row" style="margin-top: .5rem;">
     <button id="addThread">+ Add thread</button>
-    <button id="removeThread">- Remove last thread</button>
     <label>Delta: <input id="delta" type="number" value="1" /></label>
   </div>
 
@@ -47,12 +61,22 @@
     <tbody id="tbody"></tbody>
   </table>
 
+  <h3>Event Log</h3>
+  <div id="eventLog"></div>
+
   <script>
     const NR_THREADS = 128;
     const threads = [];
     let globalcountmax = 10000;
     let globalcount = 0;
     let globalreserve = 0;
+    const eventLog = [];
+
+    function logEvent(message) {
+      const timestamp = new Date().toLocaleTimeString();
+      eventLog.push({ timestamp, message });
+      if (eventLog.length > 100) eventLog.shift();
+    }
 
     function num_online_threads() {
       const n = threads.reduce((a, t) => a + (t ? 1 : 0), 0);
@@ -67,15 +91,27 @@
     function globalize_count(idx) {
       const t = threads[idx];
       if (!t) return;
+      const oldGlobalCount = globalcount;
+      const oldGlobalReserve = globalreserve;
+      const oldCounter = t.counter;
+      const oldCounterMax = t.countermax;
+      
       globalcount += t.counter;
       t.counter = 0;
       globalreserve -= t.countermax;
       t.countermax = 0;
+      
+      logEvent(`Thread #${idx} globalize: counter ${oldCounter}→0, countermax ${oldCounterMax}→0, globalcount ${oldGlobalCount}→${globalcount}, globalreserve ${oldGlobalReserve}→${globalreserve}`);
     }
 
     function balance_count(idx) {
       const t = threads[idx];
       if (!t) return;
+      const oldGlobalCount = globalcount;
+      const oldGlobalReserve = globalreserve;
+      const oldCounter = t.counter;
+      const oldCounterMax = t.countermax;
+      
       t.countermax = globalcountmax - globalcount - globalreserve;
       t.countermax = Math.floor(t.countermax / num_online_threads());
       if (t.countermax < 0) t.countermax = 0;
@@ -83,18 +119,28 @@
       t.counter = Math.floor(t.countermax / 2);
       if (t.counter > globalcount) t.counter = globalcount;
       globalcount -= t.counter;
+      
+      logEvent(`Thread #${idx} balance: counter ${oldCounter}→${t.counter}, countermax ${oldCounterMax}→${t.countermax}, globalcount ${oldGlobalCount}→${globalcount}, globalreserve ${oldGlobalReserve}→${globalreserve}`);
     }
 
     function add_count(idx, delta) {
       const t = threads[idx];
       if (!t) return false;
       if (t.countermax - t.counter >= delta) {
+        const oldCounter = t.counter;
         t.counter += delta;
+        logEvent(`Thread #${idx} add_count(${delta}) fast path: counter ${oldCounter}→${t.counter}`);
         return true;
       }
+      logEvent(`Thread #${idx} add_count(${delta}) slow path: acquiring lock`);
       globalize_count(idx);
-      if (globalcountmax - globalcount - globalreserve < delta) return false;
+      if (globalcountmax - globalcount - globalreserve < delta) {
+        logEvent(`Thread #${idx} add_count(${delta}) FAILED: insufficient capacity`);
+        return false;
+      }
+      const oldGlobalCount = globalcount;
       globalcount += delta;
+      logEvent(`Thread #${idx} add_count(${delta}): globalcount ${oldGlobalCount}→${globalcount}`);
       balance_count(idx);
       return true;
     }
@@ -103,12 +149,20 @@
       const t = threads[idx];
       if (!t) return false;
       if (t.counter >= delta) {
+        const oldCounter = t.counter;
         t.counter -= delta;
+        logEvent(`Thread #${idx} sub_count(${delta}) fast path: counter ${oldCounter}→${t.counter}`);
         return true;
       }
+      logEvent(`Thread #${idx} sub_count(${delta}) slow path: acquiring lock`);
       globalize_count(idx);
-      if (globalcount < delta) return false;
+      if (globalcount < delta) {
+        logEvent(`Thread #${idx} sub_count(${delta}) FAILED: insufficient count`);
+        return false;
+      }
+      const oldGlobalCount = globalcount;
       globalcount -= delta;
+      logEvent(`Thread #${idx} sub_count(${delta}): globalcount ${oldGlobalCount}→${globalcount}`);
       balance_count(idx);
       return true;
     }
@@ -121,21 +175,33 @@
 
     function count_register_thread() {
       const id = allocateThreadId();
-      if (id === null) return null;
+      if (id === null) {
+        logEvent('count_register_thread FAILED: no free slots');
+        return null;
+      }
       threads[id] = { counter: 0, countermax: 0 };
+      logEvent(`Thread #${id} registered: counter=0, countermax=0`);
       return id;
     }
 
     function count_unregister_thread(idx) {
       if (!threads[idx]) return;
+      logEvent(`Thread #${idx} unregistering`);
       globalize_count(idx);
       threads[idx] = null;
+      logEvent(`Thread #${idx} unregistered`);
     }
 
     const model = {
       threads,
       get globalcountmax() { return globalcountmax; },
-      set globalcountmax(v) { globalcountmax = Math.max(0, Math.floor(v)); },
+      set globalcountmax(v) { 
+        const oldValue = globalcountmax;
+        globalcountmax = Math.max(0, Math.floor(v)); 
+        if (oldValue !== globalcountmax) {
+          logEvent(`globalcountmax changed: ${oldValue}→${globalcountmax}`);
+        }
+      },
       get globalcount() { return globalcount; },
       get globalreserve() { return globalreserve; },
       read_count,
@@ -153,9 +219,9 @@
       sum: document.getElementById('sum'),
       nthreads: document.getElementById('nthreads'),
       addThread: document.getElementById('addThread'),
-      removeThread: document.getElementById('removeThread'),
       delta: document.getElementById('delta'),
       tbody: document.getElementById('tbody'),
+      eventLog: document.getElementById('eventLog'),
     };
 
     function render() {
@@ -182,6 +248,11 @@
         `);
       });
       el.tbody.innerHTML = rows.join('');
+
+      const logEntries = eventLog.slice().reverse().map(entry => 
+        `<div class="log-entry">[${entry.timestamp}] ${entry.message}</div>`
+      ).join('');
+      el.eventLog.innerHTML = logEntries || '<div class="muted">No events yet</div>';
     }
 
     el.gmax.addEventListener('change', () => {
@@ -192,16 +263,6 @@
 
     el.addThread.addEventListener('click', () => {
       model.count_register_thread();
-      render();
-    });
-
-    el.removeThread.addEventListener('click', () => {
-      for (let i = model.threads.length - 1; i >= 0; i--) {
-        if (model.threads[i]) {
-          model.count_unregister_thread(i);
-          break;
-        }
-      }
       render();
     });
 
@@ -219,6 +280,7 @@
       render();
     });
 
+    logEvent('Simulation initialized');
     model.count_register_thread();
     model.count_register_thread();
     render();
