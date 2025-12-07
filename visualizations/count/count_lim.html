@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>count_lim.c simulator</title>
+  <title>count_lim.c/count_lim_app.c simulator</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 1rem; }
     .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
@@ -32,7 +32,7 @@
   </style>
 </head>
 <body>
-  <h2>count_lim.c</h2>
+  <h2>count_lim.c/count_lim_app.c simulator</h2>
 
   <div class="row">
     <label>globalcountmax:
@@ -47,6 +47,7 @@
   <div class="row" style="margin-top: .5rem;">
     <button id="addThread">+ Add thread</button>
     <label>Delta: <input id="delta" type="number" value="1" /></label>
+    <label>MAX_COUNTERMAX: <input id="maxCounterMax" type="number" value="99999999" /></label>
   </div>
 
   <table>
@@ -70,6 +71,7 @@
     let globalcountmax = 10000;
     let globalcount = 0;
     let globalreserve = 0;
+    let MAX_COUNTERMAX = 99999999;
     const eventLog = [];
 
     function logEvent(message) {
@@ -114,6 +116,7 @@
       
       t.countermax = globalcountmax - globalcount - globalreserve;
       t.countermax = Math.floor(t.countermax / num_online_threads());
+      if (t.countermax > MAX_COUNTERMAX) t.countermax = MAX_COUNTERMAX;
       globalreserve += t.countermax;
       t.counter = Math.floor(t.countermax / 2);
       if (t.counter > globalcount) t.counter = globalcount;
@@ -193,6 +196,14 @@
 
     const model = {
       threads,
+      get maxCounterMax() { return MAX_COUNTERMAX; },
+      set maxCounterMax(v) {
+        const oldValue = MAX_COUNTERMAX;
+        MAX_COUNTERMAX = Math.max(0, Math.floor(v)); 
+        if (oldValue !== MAX_COUNTERMAX) {
+          logEvent(`maxCounterMax changed: ${oldValue}→${MAX_COUNTERMAX}`);
+        }
+      },
       get globalcountmax() { return globalcountmax; },
       set globalcountmax(v) { 
         const oldValue = globalcountmax;
@@ -221,6 +232,7 @@
       delta: document.getElementById('delta'),
       tbody: document.getElementById('tbody'),
       eventLog: document.getElementById('eventLog'),
+      maxCounterMax: document.getElementById('maxCounterMax'),
     };
 
     function render() {
@@ -229,6 +241,7 @@
       el.sum.textContent = String(model.read_count());
       el.nthreads.textContent = String(model.num_online_threads());
       el.gmax.value = String(model.globalcountmax);
+      el.maxCounterMax.value = String(model.maxCounterMax);
 
       const rows = [];
       model.threads.forEach((t, i) => {
@@ -257,6 +270,12 @@
     el.gmax.addEventListener('change', () => {
       const v = Number(el.gmax.value);
       model.globalcountmax = Number.isFinite(v) ? v : model.globalcountmax;
+      render();
+    });
+
+    el.maxCounterMax.addEventListener('change', () => {
+      const v = Number(el.maxCounterMax.value);
+      model.maxCounterMax = v;
       render();
     });
 
