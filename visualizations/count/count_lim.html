@@ -114,7 +114,6 @@
       
       t.countermax = globalcountmax - globalcount - globalreserve;
       t.countermax = Math.floor(t.countermax / num_online_threads());
-      if (t.countermax < 0) t.countermax = 0;
       globalreserve += t.countermax;
       t.counter = Math.floor(t.countermax / 2);
       if (t.counter > globalcount) t.counter = globalcount;
